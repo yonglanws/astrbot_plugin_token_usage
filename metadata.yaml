@@ -1,0 +1,8 @@
+name: astrbot_plugin_token_usage
+display_name: Token 用量统计
+desc: 近7天 / 近30天 / 累计 Token 消耗统计，HTML 精美报表渲染，支持每天定时推送到指定群聊。
+short_desc: Token 用量统计与定时群推送
+version: v1.0.0
+author: 慵懒午睡
+repo: https://github.com/yonglanws/astrbot_plugin_token_usage
+astrbot_version: ">=4.0"

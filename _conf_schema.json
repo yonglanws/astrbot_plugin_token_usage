@@ -1,0 +1,38 @@
+{
+  "db_path": {
+    "description": "AstrBot 数据库路径",
+    "type": "string",
+    "default": "",
+    "hint": "留空自动推断（插件目录向上两级 data_v4.db）。非标准部署时可填 data_v4.db 的绝对路径。"
+  },
+  "admin_only": {
+    "description": "仅管理员可用指令",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，/token 等统计指令仅管理员可触发；关闭后所有用户都能查看。"
+  },
+  "schedule_enabled": {
+    "description": "启用定时推送",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，每天在设定时间自动把 Token 统计报表图片推送到配置的群聊。"
+  },
+  "schedule_time": {
+    "description": "定时推送时间",
+    "type": "string",
+    "default": "08:00",
+    "hint": "24 小时制 HH:MM（上海时区），例如 08:00、21:30。"
+  },
+  "schedule_groups": {
+    "description": "推送目标群号",
+    "type": "string",
+    "default": "",
+    "hint": "要接收报表的群号，多个群用逗号分隔（仅数字），例如 123456789,987654321。"
+  },
+  "schedule_platform_id": {
+    "description": "推送使用的平台 ID",
+    "type": "string",
+    "default": "",
+    "hint": "留空自动使用第一个已连接的平台适配器；多平台部署时可指定，如 aiocqhttp。"
+  }
+}

@@ -1,0 +1,2 @@
+# 本插件仅依赖 AstrBot 内置能力与 Python 标准库（sqlite3 / asyncio / jinja2 由 AstrBot 提供），
+# 无需安装额外第三方包。

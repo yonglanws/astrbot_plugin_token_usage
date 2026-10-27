@@ -27,16 +27,29 @@ from astrbot.api.star import Context, Star, register
 from astrbot.core.message.message_event_result import MessageChain
 
 try:
-    from .page_builder import build_fallback_text, build_page_data
+    from .message_query import MessageDB
+    from .page_builder import (
+        build_fallback_text,
+        build_message_fallback_text,
+        build_message_page_data,
+        build_page_data,
+    )
     from .token_query import TZ, TokenDB, find_db_path
 except ImportError:  # 非包方式加载时兜底
-    from page_builder import build_fallback_text, build_page_data
+    from message_query import MessageDB
+    from page_builder import (
+        build_fallback_text,
+        build_message_fallback_text,
+        build_message_page_data,
+        build_page_data,
+    )
     from token_query import TZ, TokenDB, find_db_path
 
 PLUGIN_NAME = "astrbot_plugin_token_usage"
 # 插件内部固定文件（路径仅由 __file__ + 固定文件名推导，不涉及外部输入）
 PLUGIN_DIR = Path(__file__).resolve().parent
 TEMPLATE_PATH = PLUGIN_DIR / "templates" / "stats.html"
+TEMPLATE_MSG_PATH = PLUGIN_DIR / "templates" / "messages.html"
 STATE_PATH = PLUGIN_DIR / "state.json"
 
 # 定时推送检查间隔（秒）
@@ -46,8 +59,8 @@ SCHEDULER_TICK = 20
 @register(
     PLUGIN_NAME,
     "慵懒午睡",
-    "Token 用量统计：近24小时/近7天/近30天/累计消耗，HTML 精美报表，支持定时推送群聊",
-    "1.1.0",
+    "Token 与消息统计：24小时/7天/30·31天/累计，HTML 精美报表，支持定时推送群聊",
+    "1.2.0",
 )
 class TokenUsagePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -129,6 +142,10 @@ class TokenUsagePlugin(Star):
     def _load_template() -> str:
         return TEMPLATE_PATH.read_text(encoding="utf-8")
 
+    @staticmethod
+    def _load_message_template() -> str:
+        return TEMPLATE_MSG_PATH.read_text(encoding="utf-8")
+
     async def _render_report(self, daily30, cumulative, hourly24) -> str:
         """渲染报表图片，返回图片 URL 或本地文件路径。"""
         tmpl = self._load_template()
@@ -150,7 +167,8 @@ class TokenUsagePlugin(Star):
 
     async def _build_image(self) -> tuple[str | None, str | None, str]:
         """返回 (图片地址, 降级文本, 错误信息)。"""
-        daily30, cumulative, hourly24 = self._read_stats()
+        # 数据库聚合在独立线程执行，避免阻塞事件循环
+        daily30, cumulative, hourly24 = await asyncio.to_thread(self._read_stats)
         if daily30 is None or cumulative is None:
             return (
                 None,
@@ -170,6 +188,74 @@ class TokenUsagePlugin(Star):
                     cumulative,
                     reason=str(e)[:120],
                     hourly24=hourly24,
+                ),
+                "",
+            )
+
+    # ── 消息统计 ──
+
+    def _read_message_stats(self):
+        """读取近 24 小时、近 38 天明细与累计消息数据。
+
+        返回 (hourly24, daily38, cumulative)，失败为 None。
+        """
+        db_path = find_db_path(str(self.config.get("db_path", "") or "").strip())
+        if not db_path:
+            logger.warning("[TokenUsage] 未找到 AstrBot 主数据库 data_v4.db")
+            return None, None, None
+        db = MessageDB(db_path)
+        hourly24 = db.hourly(24)
+        if hourly24 is None:
+            return None, None, None
+        daily38 = db.daily(38)
+        if daily38 is None:
+            return None, None, None
+        cumulative = db.cumulative()
+        if cumulative is None:
+            return None, None, None
+        return hourly24, daily38, cumulative
+
+    async def _render_message_report(self, hourly24, daily38, cumulative) -> str:
+        """渲染消息统计报表图片，返回图片 URL 或本地文件路径。"""
+        tmpl = self._load_message_template()
+        data = build_message_page_data(hourly24, daily38, cumulative)
+        options = {"type": "png", "full_page": True}
+
+        if hasattr(self, "html_render"):
+            return await self.html_render(
+                tmpl, data, return_url=False, options=options
+            )
+        renderer = getattr(self.context, "html_renderer", None)
+        if renderer is not None:
+            return await renderer.render_custom_template(
+                tmpl, data, return_url=False, options=options
+            )
+        raise RuntimeError("当前 AstrBot 版本不支持 HTML 渲染")
+
+    async def _build_message_image(self) -> tuple[str | None, str | None, str]:
+        """返回 (消息统计图片, 降级文本, 错误信息)。"""
+        hourly24, daily38, cumulative = await asyncio.to_thread(
+            self._read_message_stats
+        )
+        if hourly24 is None or daily38 is None or cumulative is None:
+            return (
+                None,
+                None,
+                "❌ 读取消息统计失败：未找到 AstrBot 数据库 data_v4.db，"
+                "请在插件配置 db_path 中手动指定其绝对路径。",
+            )
+        try:
+            image = await self._render_message_report(hourly24, daily38, cumulative)
+            return image, None, ""
+        except Exception as e:
+            logger.error(f"[TokenUsage] 消息统计图片渲染失败: {e}")
+            return (
+                None,
+                build_message_fallback_text(
+                    hourly24,
+                    daily38[-7:],
+                    cumulative,
+                    reason=str(e)[:120],
                 ),
                 "",
             )
@@ -221,6 +307,65 @@ class TokenUsagePlugin(Star):
     async def token_stats_alias(self, event: AstrMessageEvent):
         """查看 Token 用量统计（别名，兼容原插件习惯）"""
         async for result in self._handle_token_command(event):
+            yield result
+
+    # ── 消息统计指令 ──
+
+    async def _handle_message_command(self, event: AstrMessageEvent):
+        if self._deny_admin(event):
+            yield event.plain_result("这个指令仅管理员可用哦～")
+            return
+
+        image, fallback_text, error = await self._build_message_image()
+        if error:
+            yield event.plain_result(error)
+            return
+        if image:
+            yield event.image_result(image)
+            return
+        yield event.plain_result(fallback_text or "暂无数据")
+
+    @filter.command("消息统计")
+    async def message_stats(self, event: AstrMessageEvent):
+        """查看消息统计（近 24 小时 / 近 7 天 / 近 31 天 / 累计）"""
+        async for result in self._handle_message_command(event):
+            yield result
+
+    @filter.command("看看消息")
+    async def message_stats_alias(self, event: AstrMessageEvent):
+        """查看消息统计（别名，兼容原插件习惯）"""
+        async for result in self._handle_message_command(event):
+            yield result
+
+    # ── 总统计指令：同时发送 Token 与消息两张报表 ──
+
+    async def _handle_all_command(self, event: AstrMessageEvent):
+        if self._deny_admin(event):
+            yield event.plain_result("这个指令仅管理员可用哦～")
+            return
+
+        # 两张报表并行取数 / 渲染
+        token_res, msg_res = await asyncio.gather(
+            self._build_image(), self._build_message_image()
+        )
+        for image, fallback_text, error in (token_res, msg_res):
+            if error:
+                yield event.plain_result(error)
+            elif image:
+                yield event.image_result(image)
+            else:
+                yield event.plain_result(fallback_text or "暂无数据")
+
+    @filter.command("总统计")
+    async def all_stats(self, event: AstrMessageEvent):
+        """同时查看 Token 统计与消息统计（发送两张报表图片）"""
+        async for result in self._handle_all_command(event):
+            yield result
+
+    @filter.command("全部统计")
+    async def all_stats_alias(self, event: AstrMessageEvent):
+        """总统计（别名）"""
+        async for result in self._handle_all_command(event):
             yield result
 
     # ══════════════════════════════════════════════════════════

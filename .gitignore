@@ -5,4 +5,5 @@ __pycache__/
 .vscode/
 state.json
 preview.html
+preview_msg.html
 .mimosa/

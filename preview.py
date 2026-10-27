@@ -18,7 +18,8 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from page_builder import build_page_data
+from message_query import MsgUsage
+from page_builder import build_message_page_data, build_page_data
 from token_query import TZ, DayUsage
 
 
@@ -63,6 +64,59 @@ def sample_hourly(hours: int = 24) -> list[DayUsage]:
     return out
 
 
+def sample_msgs_hourly(hours: int = 24) -> list:
+    """确定性伪随机逐小时消息示例数据。"""
+    now = datetime.now(TZ)
+    end = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    out = []
+    for i in range(hours):
+        hs = end - timedelta(hours=hours - i)
+        hour = hs.hour
+        activity = 0.10 + 0.90 * max(0.0, math.sin((hour - 5) / 19 * math.pi)) ** 1.5
+        wave = 1.0 + 0.35 * math.sin(i / 2.4) + 0.22 * math.sin(i / 5.1 + 0.6)
+        user = int(2600 * activity * wave)
+        bot = int(user * 0.06 * (0.7 + 0.6 * abs(math.sin(i / 3.3))))
+        out.append(MsgUsage(hs.strftime("%Y-%m-%d %H:00"), user, bot))
+    return out
+
+
+def sample_msgs_daily(days: int = 38) -> list:
+    """确定性伪随机按天消息示例数据。"""
+    base = datetime.now(TZ)
+    out = []
+    for i in range(days - 1, -1, -1):
+        d = base - timedelta(days=i)
+        weekend = d.weekday() >= 5
+        volume = (
+            1.0
+            + 0.40 * math.sin(i / 3.4)
+            + 0.26 * math.sin(i / 1.9 + 1.1)
+            + 0.14 * math.sin(i / 8.5)
+        )
+        if weekend:
+            volume *= 0.72
+        user = int(34_000 * volume)
+        bot = int(user * 0.055)
+        out.append(MsgUsage(d.strftime("%Y-%m-%d"), user, bot))
+    return out
+
+
+def render(env: Environment, template_name: str, data: dict, out_html: Path) -> None:
+    html = env.get_template(template_name).render(**data)
+    out_html.write_text(html, encoding="utf-8")
+
+
+class _MsgCumulative:
+    def __init__(self, daily: list):
+        self.user = sum(u.user for u in daily) * 18
+        self.bot = sum(u.bot for u in daily) * 18
+        self.sessions = 625
+
+    @property
+    def total(self) -> int:
+        return self.user + self.bot
+
+
 def main() -> None:
     daily30 = sample_daily(30)
     hourly24 = sample_hourly(24)
@@ -74,14 +128,20 @@ def main() -> None:
     )
     data = build_page_data(daily30, cumulative, hourly24)
 
+    msg_data = build_message_page_data(
+        sample_msgs_hourly(24),
+        sample_msgs_daily(38),
+        _MsgCumulative(sample_msgs_daily(38)),
+    )
+
     env = Environment(
         loader=FileSystemLoader(str(HERE / "templates")),
         undefined=StrictUndefined,
         autoescape=True,
     )
-    html = env.get_template("stats.html").render(**data)
-    (HERE / "preview.html").write_text(html, encoding="utf-8")
-    print("preview.html written")
+    render(env, "stats.html", data, HERE / "preview.html")
+    render(env, "messages.html", msg_data, HERE / "preview_msg.html")
+    print("preview.html / preview_msg.html written")
 
     try:
         from playwright.sync_api import sync_playwright
@@ -89,11 +149,15 @@ def main() -> None:
         with sync_playwright() as p:
             browser = p.chromium.launch()
             page = browser.new_page(viewport={"width": 860, "height": 1200})
-            page.goto((HERE / "preview.html").as_uri(), wait_until="networkidle")
-            page.wait_for_timeout(600)
-            page.screenshot(path=str(HERE / "preview.png"), full_page=True)
+            for html_name, png_name in (
+                ("preview.html", "preview.png"),
+                ("preview_msg.html", "preview_msg.png"),
+            ):
+                page.goto((HERE / html_name).as_uri(), wait_until="networkidle")
+                page.wait_for_timeout(600)
+                page.screenshot(path=str(HERE / png_name), full_page=True)
             browser.close()
-        print("preview.png written")
+        print("preview.png / preview_msg.png written")
     except Exception as e:
         print(f"playwright screenshot failed: {e}")
 

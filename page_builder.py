@@ -70,13 +70,12 @@ def _frac(value: int, whole: int) -> float:
     return max(value / whole * 100.0, 1.5)
 
 
-def _hour_block(usages: list[DayUsage]) -> dict:
-    """构建近 24 小时折线图数据（SVG 坐标在 Python 侧计算）。
+def _line_geometry(usages: list) -> dict:
+    """折线图几何数据（SVG 坐标在 Python 侧计算）。
 
-    usages 为逐小时用量（旧 → 新，date 形如 "YYYY-MM-DD HH:00"）。
+    usages 需提供 date（"YYYY-MM-DD HH:00"）与 total 属性，token / 消息统计共用。
     """
     n = len(usages)
-    total = _sum(usages)
     chart_max = max((u.total for u in usages), default=0)
     baseline = LINE_H - LINE_PAD_BOTTOM
     usable = baseline - LINE_PAD_TOP
@@ -110,7 +109,8 @@ def _hour_block(usages: list[DayUsage]) -> dict:
             "label_anchor": anchor,
             "label_x": label_x,
             "label_y": round(max(y - 9, 11), 2),
-            "now_label_y": round(y + 17, 2),
+            # 末点靠近底部时把「现在」放到点上方，避免与时间轴标签重叠
+            "now_label_y": round(y - 12 if y > baseline - 34 else y + 17, 2),
         }
         points.append(p)
         if chart_max > 0 and u.total == chart_max and peak is None:
@@ -148,20 +148,37 @@ def _hour_block(usages: list[DayUsage]) -> dict:
             if now_pt is not None
             else None
         ),
-        "sum": {
-            "input": fmt(total.input_other),
-            "cached": fmt(total.input_cached),
-            "output": fmt(total.output),
-            "total": fmt(total.total),
-            "total_short": fmt_short(total.total),
-        },
-        "avg_hour": fmt(round(total.total / n)) if n else "0",
-        "avg_hour_short": fmt_short(round(total.total / n)) if n else "0",
-        "peak_total": fmt(chart_max) if chart_max > 0 else "0",
-        "peak_hour": peak["label"] if peak else "—",
-        "active_hours": sum(1 for u in usages if u.total > 0),
-        "cached_hit_pct": _pct(total.input_cached, total.input_all) if total.input_all > 0 else "0.0",
+        "_chart_max": chart_max,
     }
+
+
+def _hour_block(usages: list[DayUsage]) -> dict:
+    """近 24 小时折线图区块（Token 版，含输入/缓存/输出明细）。"""
+    geo = _line_geometry(usages)
+    chart_max = geo.pop("_chart_max")
+    total = _sum(usages)
+    n = len(usages)
+    geo.update(
+        {
+            "sum": {
+                "input": fmt(total.input_other),
+                "cached": fmt(total.input_cached),
+                "output": fmt(total.output),
+                "total": fmt(total.total),
+                "total_short": fmt_short(total.total),
+            },
+            "avg_hour": fmt(round(total.total / n)) if n else "0",
+            "avg_hour_short": fmt_short(round(total.total / n)) if n else "0",
+            "peak_total": fmt(chart_max) if chart_max > 0 else "0",
+            "peak_hour": geo["peak"]["label"] if geo["peak"] else "—",
+            "active_hours": sum(1 for u in usages if u.total > 0),
+            "cached_hit_pct": _pct(total.input_cached, total.input_all)
+            if total.input_all > 0
+            else "0.0",
+        }
+    )
+    return geo
+
 
 
 def _range_block(title: str, subtitle: str, usages: list[DayUsage], label_step: int = 1) -> dict:
@@ -334,6 +351,246 @@ def build_fallback_text(
             "【累计总量】",
             f"  输入：{fmt(cumulative.input_other)}  缓存：{fmt(cumulative.input_cached)}  输出：{fmt(cumulative.output)}",
             f"  合计：{fmt(cumulative.total)}",
+        ]
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    if reason:
+        lines.append(f"（图片渲染失败已降级为文本：{reason}）")
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════
+#  消息统计页面数据
+# ══════════════════════════════════════════════════════════════
+
+COLOR_USER = COLOR_INPUT  # 用户消息 · 靛蓝
+COLOR_BOT = COLOR_OUTPUT  # 机器人消息 · 赭红
+
+
+def _msg_hour_block(usages: list) -> dict:
+    """近 24 小时消息折线图区块（用户 / 机器人合计）。"""
+    geo = _line_geometry(usages)
+    chart_max = geo.pop("_chart_max")
+    n = len(usages)
+    total_user = sum(u.user for u in usages)
+    total_bot = sum(u.bot for u in usages)
+    total = total_user + total_bot
+    geo.update(
+        {
+            "sum": {
+                "user": fmt(total_user),
+                "bot": fmt(total_bot),
+                "total": fmt(total),
+                "total_short": fmt_short(total),
+            },
+            "avg_hour": fmt(round(total / n)) if n else "0",
+            "peak_total": fmt(chart_max) if chart_max > 0 else "0",
+            "peak_hour": geo["peak"]["label"] if geo["peak"] else "—",
+            "active_hours": sum(1 for u in usages if u.total > 0),
+            "user_pct": _pct(total_user, total) if total > 0 else "0.0",
+        }
+    )
+    return geo
+
+
+def _msg_range_block(usages: list, label_step: int = 1) -> dict:
+    """消息统计的按天区块（近 7 天 / 近 31 天），条形按用户 / 机器人分两段。"""
+    n = len(usages)
+    total_user = sum(u.user for u in usages)
+    total_bot = sum(u.bot for u in usages)
+    total = total_user + total_bot
+    chart_max = max((u.total for u in usages), default=0)
+    max_day = max(usages, key=lambda u: u.total) if usages else None
+    active_days = sum(1 for u in usages if u.total > 0)
+
+    days = []
+    for idx, u in enumerate(usages):
+        d = datetime.strptime(u.date, "%Y-%m-%d")
+        is_last = idx == n - 1
+        days.append(
+            {
+                "date_short": u.date[5:],
+                "date_full": u.date,
+                "weekday": "一二三四五六日"[d.weekday()],
+                "total": fmt(u.total),
+                "total_short": fmt_short(u.total),
+                "user": fmt(u.user),
+                "bot": fmt(u.bot),
+                "bar_h": round(_bar_height(u.total, chart_max), 2),
+                "frac_user": round(_frac(u.user, u.total), 2),
+                "frac_bot": round(_frac(u.bot, u.total), 2),
+                "is_today": is_last,
+                "is_max": max_day is not None and u.date == max_day.date and u.total > 0,
+                "show_label": (idx % label_step == (n - 1) % label_step) or is_last,
+            }
+        )
+
+    return {
+        "days": days,
+        "sum": {
+            "user": fmt(total_user),
+            "bot": fmt(total_bot),
+            "total": fmt(total),
+            "total_short": fmt_short(total),
+        },
+        "avg_total": fmt(round(total / n)) if n else "0",
+        "avg_total_short": fmt_short(round(total / n)) if n else "0",
+        "peak_total": fmt(max_day.total) if max_day else "0",
+        "peak_date": max_day.date if max_day else "",
+        "active_days": active_days,
+        "user_pct": _pct(total_user, total) if total > 0 else "0.0",
+    }
+
+
+def _msg_kpi(label: str, total: int, date_text: str, accent: str, sub: str, trend_dir: str = "") -> dict:
+    return {
+        "label": label,
+        "date": date_text,
+        "accent": accent,
+        "sub": sub,
+        "trend_dir": trend_dir,
+        "total": fmt(total),
+        "total_short": fmt_short(total),
+    }
+
+
+def build_message_page_data(
+    hourly24: list,
+    daily38: list,
+    cumulative,
+) -> dict:
+    """组装消息统计页面数据。
+
+    hourly24 为最近 24 个整点小时；daily38 为最近 38 个自然日（含今天），
+    最近 31 天用于趋势图，最近 14 天用于 7 天环比。
+    """
+    now = datetime.now(TZ)
+    hourly24 = hourly24 or []
+    daily38 = daily38 or []
+    daily7 = daily38[-7:]
+    daily31 = daily38[-31:]
+
+    range24 = _msg_hour_block(hourly24)
+    range7 = _msg_range_block(daily7)
+    range31 = _msg_range_block(daily31, label_step=5)
+
+    h24_total = sum(u.total for u in hourly24)
+    h24_user = sum(u.user for u in hourly24)
+    h24_bot = sum(u.bot for u in hourly24)
+    d7_total = sum(u.total for u in daily7)
+    d7_user = sum(u.user for u in daily7)
+    d7_bot = sum(u.bot for u in daily7)
+    d31_total = sum(u.total for u in daily31)
+
+    # 近 7 天环比再前 7 天
+    trend_sub = f"日均 {fmt_short(round(d7_total / 7))}" if daily7 else "日均 0"
+    trend_dir = ""
+    if len(daily38) >= 14:
+        prev7 = sum(u.total for u in daily38[-14:-7])
+        if prev7 > 0:
+            delta = (d7_total - prev7) / prev7 * 100
+            arrow = "▲" if delta >= 0 else "▼"
+            trend_sub = f"{arrow} {abs(delta):.1f}% 环比前7天"
+            trend_dir = "up" if delta >= 0 else "down"
+
+    kpis = [
+        _msg_kpi(
+            "近 24 小时",
+            h24_total,
+            now.strftime("%m-%d"),
+            COLOR_USER,
+            f"用户 {fmt_short(h24_user)} · 机器人 {fmt_short(h24_bot)}",
+        ),
+        _msg_kpi("近 7 天", d7_total, "7 天合计", COLOR_CACHED, trend_sub, trend_dir),
+        _msg_kpi(
+            "近 31 天",
+            d31_total,
+            "31 天合计",
+            COLOR_OCHRE,
+            f"日均 {fmt_short(round(d31_total / 31))}",
+        ),
+        _msg_kpi(
+            "累计消息",
+            cumulative.total,
+            "全部历史",
+            COLOR_OUTPUT,
+            f"会话 {fmt(cumulative.sessions)} 个",
+        ),
+    ]
+
+    total = cumulative.total
+    cumulative_block = {
+        "total": fmt(total),
+        "total_short": fmt_short(total),
+        "user": fmt(cumulative.user),
+        "bot": fmt(cumulative.bot),
+        "user_pct": _pct(cumulative.user, total),
+        "bot_pct": _pct(cumulative.bot, total),
+        "sessions": fmt(cumulative.sessions),
+        "breakdown": [
+            {
+                "name": "用户消息",
+                "desc": "群友 / 私聊",
+                "value": fmt(cumulative.user),
+                "pct": _pct(cumulative.user, total),
+                "color": COLOR_USER,
+            },
+            {
+                "name": "机器人消息",
+                "desc": "AI 回复与主动消息",
+                "value": fmt(cumulative.bot),
+                "pct": _pct(cumulative.bot, total),
+                "color": COLOR_BOT,
+            },
+            {
+                "name": "会话数",
+                "desc": "群聊 + 私聊（去重）",
+                "value": fmt(cumulative.sessions),
+                "pct": "",
+                "color": "#7c7364",
+            },
+        ],
+    }
+
+    return {
+        "report_no": now.strftime("%Y%m%d-%H%M"),
+        "generated_at": now.strftime("%Y-%m-%d %H:%M"),
+        "generated_weekday": "周" + "一二三四五六日"[now.weekday()],
+        "kpis": kpis,
+        "range24": range24,
+        "range7": range7,
+        "range31": range31,
+        "cumulative": cumulative_block,
+    }
+
+
+def build_message_fallback_text(
+    hourly24: list,
+    daily7: list,
+    cumulative,
+    reason: str = "",
+) -> str:
+    """消息统计渲染失败时的纯文本降级输出。"""
+    lines = ["💬 消息统计（与 AstrBot 系统数据库同源）", "━━━━━━━━━━━━━━━━━━━━"]
+    if hourly24:
+        total = sum(u.total for u in hourly24)
+        peak = max(hourly24, key=lambda u: u.total)
+        lines += [
+            "【近 24 小时】",
+            f"  合计：{fmt(total)} 条  峰值：{fmt(peak.total)} 条（{peak.date[11:]}）",
+        ]
+    if daily7:
+        total7 = sum(u.total for u in daily7)
+        lines += [
+            "【近 7 天】",
+            f"  合计：{fmt(total7)} 条  日均：{fmt(round(total7 / 7))} 条",
+        ]
+        for u in daily7:
+            lines.append(f"  {u.date}  {fmt(u.total)}（用户 {fmt(u.user)} / 机器人 {fmt(u.bot)}）")
+    if cumulative is not None:
+        lines += [
+            "【累计】",
+            f"  合计：{fmt(cumulative.total)} 条  会话：{fmt(cumulative.sessions)} 个",
+            f"  用户 {fmt(cumulative.user)} 条 / 机器人 {fmt(cumulative.bot)} 条",
         ]
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     if reason:

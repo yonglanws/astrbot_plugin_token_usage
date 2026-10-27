@@ -1,6 +1,6 @@
 # astrbot_plugin_token_usage
 
-> 精美 Token 用量统计插件 —— 近 24 小时 / 近 7 天 / 近 30 天 / 累计消耗，一张图看全。
+> 精美 Token 消耗与消息量统计插件 —— 近 24 小时 / 近 7 天 / 近 30·31 天 / 累计，一张图看全。
 > 数据直接读取 AstrBot 系统库，与 dashboard 统计同源同口径。
 
 - **作者**：慵懒午睡
@@ -11,16 +11,21 @@
 
 | 功能 | 说明 |
 | --- | --- |
-| 近 24 小时统计 | 逐小时总消耗折线图（含面积渐变），峰值与当前小时标注，附合计、时均、峰值、缓存命中率 |
-| 近 7 天统计 | 每日横向账簿条（输入 / 缓存命中 / 输出）+ 合计、日均、峰值、缓存命中率 |
-| 近 30 天统计 | 30 天每日趋势柱状图，峰值高亮，附区间合计与日均 |
-| 累计统计 | 全历史累计总量 + 输入 / 缓存 / 输出占比构成条 |
+| Token 统计 | 近 24 小时折线图、近 7 天账簿条、近 30 天趋势、累计构成，一张报表看全 |
+| 消息统计 | 近 24 小时折线图、近 7 天明细、近 31 天趋势、累计构成（用户 / 机器人 / 会话数） |
+| 总统计 | 一条指令同时生成并发送 Token 与消息两张报表图片 |
+| 近 24 小时 | 逐小时折线图（含面积渐变），峰值与当前小时标注，附合计、时均、峰值等指标 |
+| 近 7 天 | 每日横向账簿条（Token：输入 / 缓存 / 输出；消息：用户 / 机器人） |
+| 近 30 / 31 天 | 每日趋势柱状图，峰值高亮，附区间合计与日均 |
+| 累计统计 | 全历史累计数字 + 构成比例条 + 分项明细 |
 | 精美渲染 | 暖纸账簿风 HTML 报表（宋体标题 + 等宽数字 + 三色账簿条），通过 AstrBot 内置 t2i 渲染服务出图 |
-| 定时推送 | 每天指定时间自动把报表图片推送到一个或多个群聊 |
-| 文本降级 | 渲染服务不可用时自动降级为纯文本报表，保证数据可达 |
+| 定时推送 | 每天指定时间自动把 Token 报表图片推送到一个或多个群聊 |
+| 文本降级 | 渲染服务不可用或数据库缺失时自动降级为纯文本报表 |
 | 安全只读 | 以 SQLite 只读模式打开系统库，不影响 AstrBot 正常运行 |
 
-![效果预览](preview.png)
+![Token 报表预览](preview.png)
+
+![消息报表预览](preview_msg.png)
 
 ## 📦 安装
 
@@ -45,9 +50,13 @@
 
 | 指令 | 说明 |
 | --- | --- |
-| `/token` | 生成完整统计报表图片（近 7 天 / 近 30 天 / 累计） |
+| `/token` | 生成 Token 用量报表图片（近 24 小时 / 近 7 天 / 近 30 天 / 累计） |
 | `/token统计` | 同上（中文别名） |
 | `/看看token` | 同上（兼容参考插件的使用习惯） |
+| `/消息统计` | 生成消息统计报表图片（近 24 小时 / 近 7 天 / 近 31 天 / 累计） |
+| `/看看消息` | 同上（别名） |
+| `/总统计` | 同时生成并发送 Token 与消息两张报表图片（并行渲染） |
+| `/全部统计` | 同上（别名） |
 
 > 默认仅管理员可用，可在配置中关闭 `admin_only`。
 
@@ -63,14 +72,24 @@
 
 ## 📐 统计口径
 
+### Token 统计
+
 - 数据来源：AstrBot 主数据库 `data_v4.db` 的 `provider_stats` 表，**只读连接**；
 - 过滤条件：`agent_type = 'internal'`，与 dashboard 系统统计一致；
 - 三项指标：`token_input_other`（输入）、`token_input_cached`（缓存命中）、`token_output`（输出），合计 = 三者之和；
 - 日期切分：数据库 `created_at` 为 UTC 时间，插件按**上海时区（UTC+8）**自然日换算查询边界；
 - 「近 24 小时」按整点小时分桶（含当前小时，共 24 桶），「今日/昨日」为自然日数据；
-- 「累计」为全历史数据，「今日/昨日」为自然日数据。
+- 「累计」为全历史数据。
 
-> 该读取逻辑参考 [yuebai5203/astrbot_plugin_msg_stat](https://github.com/yuebai5203/astrbot_plugin_msg_stat) 的实现（GPLv3）。
+### 消息统计
+
+- 数据来源：AstrBot 主数据库 `data_v4.db` 的 `platform_message_history` 表，**只读连接**；
+- 消息类型：`content` JSON 中的 `$.type` 字段，`user` 为用户消息、`bot` 为机器人消息，无效 JSON 行自动跳过；
+- 会话数：`COUNT(DISTINCT user_id)`，即去重后的群聊 / 私聊会话数量；
+- 所有区间均用单次 `GROUP BY` 聚合，兼容无 `created_at` 索引的大表（60 万行级别约 3~4 秒）；
+- 时间口径与 Token 统计一致：UTC 存储、按上海时区（UTC+8）分桶。
+
+> Token 读取逻辑参考 [yuebai5203/astrbot_plugin_msg_stat](https://github.com/yuebai5203/astrbot_plugin_msg_stat) 的实现（GPLv3）。
 
 ## 🕗 定时推送说明
 
@@ -96,12 +115,16 @@ A：请确认 AstrBot 版本一致；本插件与 dashboard 使用同一张表�
 astrbot_plugin_token_usage/
 ├── main.py              # 插件入口：指令、定时推送
 ├── token_query.py       # provider_stats 只读查询（与 dashboard 同源）
+├── message_query.py     # platform_message_history 只读查询（消息统计）
 ├── page_builder.py      # 页面数据聚合与格式化
 ├── templates/
-│   └── stats.html       # Jinja2 统计页模板（t2i 服务端渲染）
+│   ├── stats.html       # Token 统计页模板（t2i 服务端渲染）
+│   └── messages.html    # 消息统计页模板（t2i 服务端渲染）
 ├── _conf_schema.json    # 插件配置 schema
 ├── metadata.yaml        # 插件元数据
 ├── preview.py           # 本地设计预览脚本（开发用）
+├── preview.png          # Token 报表效果图
+├── preview_msg.png      # 消息报表效果图
 ├── requirements.txt
 ├── LICENSE              # GPLv3
 └── README.md

@@ -12,7 +12,7 @@
 | 功能 | 说明 |
 | --- | --- |
 | Token 统计 | 近 24 小时折线图、近 7 天账簿条、近 30 天趋势、累计构成，一张报表看全 |
-| 消息统计 | 近 24 小时折线图、近 7 天明细、近 31 天趋势、累计构成（用户 / 机器人 / 会话数） |
+| 消息统计 | 近 24 小时折线图、近 7 天明细、近 31 天趋势、累计构成（平台分布，与后台统计一致） |
 | 总统计 | 一条指令同时生成并发送 Token 与消息两张报表图片 |
 | 近 24 小时 | 逐小时折线图（含面积渐变），峰值与当前小时标注，附合计、时均、峰值等指标 |
 | 近 7 天 | 每日横向账簿条（Token：输入 / 缓存 / 输出；消息：用户 / 机器人） |
@@ -83,11 +83,12 @@
 
 ### 消息统计
 
-- 数据来源：AstrBot 主数据库 `data_v4.db` 的 `platform_message_history` 表，**只读连接**；
-- 消息类型：`content` JSON 中的 `$.type` 字段，`user` 为用户消息、`bot` 为机器人消息，无效 JSON 行自动跳过；
-- 会话数：`COUNT(DISTINCT user_id)`，即去重后的群聊 / 私聊会话数量；
-- 所有区间均用单次 `GROUP BY` 聚合，兼容无 `created_at` 索引的大表（60 万行级别约 3~4 秒）；
-- 时间口径与 Token 统计一致：UTC 存储、按上海时区（UTC+8）分桶。
+- 数据来源：AstrBot 主数据库 `data_v4.db` 的 `platform_stats` 表，**只读连接**；
+- 口径与 AstrBot 后台（dashboard）完全一致：后台的累计消息数即 `SUM(count)`，本插件直接采用同一张表、同一口径；
+- `platform_stats` 由 AstrBot 每收到一条消息时按「小时 × 平台」累加（`count`），本插件按时间窗口聚合；
+- `timestamp` 为服务器本地时间的整点桶，历史版本写入的 Unix 时间戳与无效记录会被自动兼容 / 跳过；
+- 累计构成按 `platform_id`（平台适配器）分布展示；
+- 「近 24 小时」为 24 个整点小时窗口，「近 7 / 31 天」为自然日窗口（含今天）。
 
 > Token 读取逻辑参考 [yuebai5203/astrbot_plugin_msg_stat](https://github.com/yuebai5203/astrbot_plugin_msg_stat) 的实现（GPLv3）。
 
@@ -115,7 +116,7 @@ A：请确认 AstrBot 版本一致；本插件与 dashboard 使用同一张表�
 astrbot_plugin_token_usage/
 ├── main.py              # 插件入口：指令、定时推送
 ├── token_query.py       # provider_stats 只读查询（与 dashboard 同源）
-├── message_query.py     # platform_message_history 只读查询（消息统计）
+├── message_query.py     # platform_stats 只读查询（与后台消息统计同口径）
 ├── page_builder.py      # 页面数据聚合与格式化
 ├── templates/
 │   ├── stats.html       # Token 统计页模板（t2i 服务端渲染）

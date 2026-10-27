@@ -65,7 +65,7 @@ def sample_hourly(hours: int = 24) -> list[DayUsage]:
 
 
 def sample_msgs_hourly(hours: int = 24) -> list:
-    """确定性伪随机逐小时消息示例数据。"""
+    """确定性伪随机逐小时消息示例数据（按平台分布）。"""
     now = datetime.now(TZ)
     end = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
     out = []
@@ -74,14 +74,21 @@ def sample_msgs_hourly(hours: int = 24) -> list:
         hour = hs.hour
         activity = 0.10 + 0.90 * max(0.0, math.sin((hour - 5) / 19 * math.pi)) ** 1.5
         wave = 1.0 + 0.35 * math.sin(i / 2.4) + 0.22 * math.sin(i / 5.1 + 0.6)
-        user = int(2600 * activity * wave)
-        bot = int(user * 0.06 * (0.7 + 0.6 * abs(math.sin(i / 3.3))))
-        out.append(MsgUsage(hs.strftime("%Y-%m-%d %H:00"), user, bot))
+        total = int(2600 * activity * wave)
+        qq = int(total * (0.72 + 0.10 * math.sin(i / 3.7)))
+        aio = max(total - qq - 2, 0)
+        out.append(
+            MsgUsage(
+                hs.strftime("%Y-%m-%d %H:00"),
+                total,
+                {"qq_official": qq, "aiocqhttp": aio, "cron": 2},
+            )
+        )
     return out
 
 
 def sample_msgs_daily(days: int = 38) -> list:
-    """确定性伪随机按天消息示例数据。"""
+    """确定性伪随机按天消息示例数据（按平台分布）。"""
     base = datetime.now(TZ)
     out = []
     for i in range(days - 1, -1, -1):
@@ -95,26 +102,35 @@ def sample_msgs_daily(days: int = 38) -> list:
         )
         if weekend:
             volume *= 0.72
-        user = int(34_000 * volume)
-        bot = int(user * 0.055)
-        out.append(MsgUsage(d.strftime("%Y-%m-%d"), user, bot))
+        total = int(34_000 * volume)
+        qq = int(total * (0.68 + 0.12 * math.sin(i / 2.9)))
+        aio = max(int(total * 0.28), 0)
+        out.append(
+            MsgUsage(
+                d.strftime("%Y-%m-%d"),
+                total,
+                {"qq_official": qq, "aiocqhttp": aio, "cron": max(total - qq - aio, 0)},
+            )
+        )
     return out
+
+
+def sample_msgs_cumulative() -> MsgUsage:
+    """由示例日数据放大构造累计平台分布。"""
+    daily = sample_msgs_daily(38)
+    platforms = {}
+    for u in daily:
+        for pid, count in u.platforms.items():
+            platforms[pid] = platforms.get(pid, 0) + count * 18
+    # 历史遗留平台，占比很小
+    platforms["onebot_dist"] = 2400
+    platforms["webchat"] = 900
+    return MsgUsage("", sum(platforms.values()), platforms)
 
 
 def render(env: Environment, template_name: str, data: dict, out_html: Path) -> None:
     html = env.get_template(template_name).render(**data)
     out_html.write_text(html, encoding="utf-8")
-
-
-class _MsgCumulative:
-    def __init__(self, daily: list):
-        self.user = sum(u.user for u in daily) * 18
-        self.bot = sum(u.bot for u in daily) * 18
-        self.sessions = 625
-
-    @property
-    def total(self) -> int:
-        return self.user + self.bot
 
 
 def main() -> None:
@@ -131,7 +147,7 @@ def main() -> None:
     msg_data = build_message_page_data(
         sample_msgs_hourly(24),
         sample_msgs_daily(38),
-        _MsgCumulative(sample_msgs_daily(38)),
+        sample_msgs_cumulative(),
     )
 
     env = Environment(

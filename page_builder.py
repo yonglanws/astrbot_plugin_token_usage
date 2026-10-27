@@ -362,50 +362,83 @@ def build_fallback_text(
 #  消息统计页面数据
 # ══════════════════════════════════════════════════════════════
 
-COLOR_USER = COLOR_INPUT  # 用户消息 · 靛蓝
-COLOR_BOT = COLOR_OUTPUT  # 机器人消息 · 赭红
+COLOR_OTHER = "#9a8f7c"  # 其他平台 · 灰褐
+MSG_PLATFORM_COLORS = (COLOR_INPUT, COLOR_CACHED, COLOR_OCHRE)
+
+
+def _top_platform(platforms: dict[str, int]) -> tuple[str, int]:
+    if not platforms:
+        return "—", 0
+    pid, count = max(platforms.items(), key=lambda kv: kv[1])
+    return pid, count
 
 
 def _msg_hour_block(usages: list) -> dict:
-    """近 24 小时消息折线图区块（用户 / 机器人合计）。"""
+    """近 24 小时消息折线图区块（全部平台合计）。"""
     geo = _line_geometry(usages)
     chart_max = geo.pop("_chart_max")
     n = len(usages)
-    total_user = sum(u.user for u in usages)
-    total_bot = sum(u.bot for u in usages)
-    total = total_user + total_bot
+    total = sum(u.total for u in usages)
+    platforms: dict[str, int] = {}
+    for u in usages:
+        for pid, count in u.platforms.items():
+            platforms[pid] = platforms.get(pid, 0) + count
+    top_pid, top_count = _top_platform(platforms)
     geo.update(
         {
-            "sum": {
-                "user": fmt(total_user),
-                "bot": fmt(total_bot),
-                "total": fmt(total),
-                "total_short": fmt_short(total),
-            },
+            "sum": {"total": fmt(total), "total_short": fmt_short(total)},
             "avg_hour": fmt(round(total / n)) if n else "0",
             "peak_total": fmt(chart_max) if chart_max > 0 else "0",
             "peak_hour": geo["peak"]["label"] if geo["peak"] else "—",
             "active_hours": sum(1 for u in usages if u.total > 0),
-            "user_pct": _pct(total_user, total) if total > 0 else "0.0",
+            "platform_count": sum(1 for c in platforms.values() if c > 0),
+            "top_platform": top_pid,
+            "top_platform_pct": _pct(top_count, total) if total > 0 else "0.0",
         }
     )
     return geo
 
 
-def _msg_range_block(usages: list, label_step: int = 1) -> dict:
-    """消息统计的按天区块（近 7 天 / 近 31 天），条形按用户 / 机器人分两段。"""
+def _msg_range_block(
+    usages: list,
+    label_step: int = 1,
+    order: list[str] | None = None,
+) -> dict:
+    """消息统计的按天区块（近 7 天 / 近 31 天），条形按平台堆叠。"""
+    order = order or []
+    color_of = {
+        pid: MSG_PLATFORM_COLORS[i % len(MSG_PLATFORM_COLORS)]
+        for i, pid in enumerate(order)
+    }
     n = len(usages)
-    total_user = sum(u.user for u in usages)
-    total_bot = sum(u.bot for u in usages)
-    total = total_user + total_bot
+    total = sum(u.total for u in usages)
     chart_max = max((u.total for u in usages), default=0)
     max_day = max(usages, key=lambda u: u.total) if usages else None
     active_days = sum(1 for u in usages if u.total > 0)
 
+    platform_totals: dict[str, int] = {}
+    for u in usages:
+        for pid, count in u.platforms.items():
+            platform_totals[pid] = platform_totals.get(pid, 0) + count
+
     days = []
     for idx, u in enumerate(usages):
         d = datetime.strptime(u.date, "%Y-%m-%d")
-        is_last = idx == n - 1
+        segments = []
+        for pid in order:
+            count = u.platforms.get(pid, 0)
+            if count > 0:
+                segments.append(
+                    {
+                        "frac": round(_frac(count, u.total), 2),
+                        "color": color_of[pid],
+                    }
+                )
+        other = sum(c for pid, c in u.platforms.items() if pid not in color_of)
+        if other > 0:
+            segments.append(
+                {"frac": round(_frac(other, u.total), 2), "color": COLOR_OTHER}
+            )
         days.append(
             {
                 "date_short": u.date[5:],
@@ -413,31 +446,35 @@ def _msg_range_block(usages: list, label_step: int = 1) -> dict:
                 "weekday": "一二三四五六日"[d.weekday()],
                 "total": fmt(u.total),
                 "total_short": fmt_short(u.total),
-                "user": fmt(u.user),
-                "bot": fmt(u.bot),
                 "bar_h": round(_bar_height(u.total, chart_max), 2),
-                "frac_user": round(_frac(u.user, u.total), 2),
-                "frac_bot": round(_frac(u.bot, u.total), 2),
-                "is_today": is_last,
+                "segments": segments,
+                "is_today": idx == n - 1,
                 "is_max": max_day is not None and u.date == max_day.date and u.total > 0,
-                "show_label": (idx % label_step == (n - 1) % label_step) or is_last,
+                "show_label": (idx % label_step == (n - 1) % label_step)
+                or idx == n - 1,
             }
         )
 
+    legend = [
+        {"name": pid, "color": color_of[pid]}
+        for pid in order
+        if platform_totals.get(pid, 0) > 0
+    ]
+    if any(pid not in color_of for pid, c in platform_totals.items() if c > 0):
+        legend.append({"name": "其他平台", "color": COLOR_OTHER})
+
+    top_pid, top_count = _top_platform(platform_totals)
     return {
         "days": days,
-        "sum": {
-            "user": fmt(total_user),
-            "bot": fmt(total_bot),
-            "total": fmt(total),
-            "total_short": fmt_short(total),
-        },
+        "legend": legend,
+        "sum": {"total": fmt(total), "total_short": fmt_short(total)},
         "avg_total": fmt(round(total / n)) if n else "0",
         "avg_total_short": fmt_short(round(total / n)) if n else "0",
         "peak_total": fmt(max_day.total) if max_day else "0",
         "peak_date": max_day.date if max_day else "",
         "active_days": active_days,
-        "user_pct": _pct(total_user, total) if total > 0 else "0.0",
+        "top_platform": top_pid,
+        "top_platform_pct": _pct(top_count, total) if total > 0 else "0.0",
     }
 
 
@@ -469,16 +506,18 @@ def build_message_page_data(
     daily7 = daily38[-7:]
     daily31 = daily38[-31:]
 
+    # 平台顺序按累计总量排序，保证图表配色在全页一致
+    platform_rank = sorted(
+        cumulative.platforms.items(), key=lambda kv: kv[1], reverse=True
+    )
+    order = [pid for pid, _ in platform_rank[:3]]
+
     range24 = _msg_hour_block(hourly24)
-    range7 = _msg_range_block(daily7)
-    range31 = _msg_range_block(daily31, label_step=5)
+    range7 = _msg_range_block(daily7, order=order)
+    range31 = _msg_range_block(daily31, label_step=5, order=order)
 
     h24_total = sum(u.total for u in hourly24)
-    h24_user = sum(u.user for u in hourly24)
-    h24_bot = sum(u.bot for u in hourly24)
     d7_total = sum(u.total for u in daily7)
-    d7_user = sum(u.user for u in daily7)
-    d7_bot = sum(u.bot for u in daily7)
     d31_total = sum(u.total for u in daily31)
 
     # 近 7 天环比再前 7 天
@@ -497,8 +536,8 @@ def build_message_page_data(
             "近 24 小时",
             h24_total,
             now.strftime("%m-%d"),
-            COLOR_USER,
-            f"用户 {fmt_short(h24_user)} · 机器人 {fmt_short(h24_bot)}",
+            COLOR_INPUT,
+            f"主平台 {range24['top_platform']} 占 {range24['top_platform_pct']}%",
         ),
         _msg_kpi("近 7 天", d7_total, "7 天合计", COLOR_CACHED, trend_sub, trend_dir),
         _msg_kpi(
@@ -513,42 +552,39 @@ def build_message_page_data(
             cumulative.total,
             "全部历史",
             COLOR_OUTPUT,
-            f"会话 {fmt(cumulative.sessions)} 个",
+            f"平台 {len([1 for _, c in platform_rank if c > 0])} 个",
         ),
     ]
 
     total = cumulative.total
+    # 累计构成：前 2 个平台 + 其他平台合计（与 dashboard 的 SUM(count) 口径一致）
+    breakdown = []
+    for i, (pid, count) in enumerate(platform_rank[:2]):
+        breakdown.append(
+            {
+                "name": pid,
+                "desc": "平台适配器",
+                "value": fmt(count),
+                "pct": _pct(count, total),
+                "color": MSG_PLATFORM_COLORS[i % len(MSG_PLATFORM_COLORS)],
+            }
+        )
+    other_total = sum(c for _, c in platform_rank[2:])
+    if other_total > 0:
+        breakdown.append(
+            {
+                "name": "其他平台",
+                "desc": "其余适配器合计",
+                "value": fmt(other_total),
+                "pct": _pct(other_total, total),
+                "color": COLOR_OTHER,
+            }
+        )
     cumulative_block = {
         "total": fmt(total),
         "total_short": fmt_short(total),
-        "user": fmt(cumulative.user),
-        "bot": fmt(cumulative.bot),
-        "user_pct": _pct(cumulative.user, total),
-        "bot_pct": _pct(cumulative.bot, total),
-        "sessions": fmt(cumulative.sessions),
-        "breakdown": [
-            {
-                "name": "用户消息",
-                "desc": "群友 / 私聊",
-                "value": fmt(cumulative.user),
-                "pct": _pct(cumulative.user, total),
-                "color": COLOR_USER,
-            },
-            {
-                "name": "机器人消息",
-                "desc": "AI 回复与主动消息",
-                "value": fmt(cumulative.bot),
-                "pct": _pct(cumulative.bot, total),
-                "color": COLOR_BOT,
-            },
-            {
-                "name": "会话数",
-                "desc": "群聊 + 私聊（去重）",
-                "value": fmt(cumulative.sessions),
-                "pct": "",
-                "color": "#7c7364",
-            },
-        ],
+        "platform_count": len([1 for _, c in platform_rank if c > 0]),
+        "breakdown": breakdown,
     }
 
     return {
@@ -569,8 +605,8 @@ def build_message_fallback_text(
     cumulative,
     reason: str = "",
 ) -> str:
-    """消息统计渲染失败时的纯文本降级输出。"""
-    lines = ["💬 消息统计（与 AstrBot 系统数据库同源）", "━━━━━━━━━━━━━━━━━━━━"]
+    """消息统计渲染失败时的纯文本降级输出（口径同 dashboard）。"""
+    lines = ["💬 消息统计（与 AstrBot 后台统计同源）", "━━━━━━━━━━━━━━━━━━━━"]
     if hourly24:
         total = sum(u.total for u in hourly24)
         peak = max(hourly24, key=lambda u: u.total)
@@ -585,13 +621,15 @@ def build_message_fallback_text(
             f"  合计：{fmt(total7)} 条  日均：{fmt(round(total7 / 7))} 条",
         ]
         for u in daily7:
-            lines.append(f"  {u.date}  {fmt(u.total)}（用户 {fmt(u.user)} / 机器人 {fmt(u.bot)}）")
+            lines.append(f"  {u.date}  {fmt(u.total)} 条")
     if cumulative is not None:
-        lines += [
-            "【累计】",
-            f"  合计：{fmt(cumulative.total)} 条  会话：{fmt(cumulative.sessions)} 个",
-            f"  用户 {fmt(cumulative.user)} 条 / 机器人 {fmt(cumulative.bot)} 条",
-        ]
+        lines.append("【累计】")
+        lines.append(f"  合计：{fmt(cumulative.total)} 条")
+        ranked = sorted(
+            cumulative.platforms.items(), key=lambda kv: kv[1], reverse=True
+        )
+        for pid, count in ranked[:4]:
+            lines.append(f"  {pid}：{fmt(count)} 条")
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     if reason:
         lines.append(f"（图片渲染失败已降级为文本：{reason}）")

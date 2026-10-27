@@ -60,7 +60,7 @@ SCHEDULER_TICK = 20
     PLUGIN_NAME,
     "慵懒午睡",
     "Token 与消息统计：24小时/7天/30·31天/累计，HTML 精美报表，支持定时推送群聊",
-    "1.2.0",
+    "1.2.1",
 )
 class TokenUsagePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):

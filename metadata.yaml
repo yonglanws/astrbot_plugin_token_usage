@@ -2,7 +2,7 @@ name: astrbot_plugin_token_usage
 display_name: Token 与消息统计
 desc: Token 消耗与消息量统计报表（24小时/7天/30·31天/累计），HTML 精美渲染，支持定时推送到指定群聊。
 short_desc: Token 与消息统计报表
-version: v1.2.0
+version: v1.2.1
 author: 慵懒午睡
 repo: https://github.com/yonglanws/astrbot_plugin_token_usage
 astrbot_version: ">=4.0"

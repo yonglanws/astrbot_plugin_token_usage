@@ -112,7 +112,7 @@
     .block-head .hint { margin-left: auto; font-size: 11.5px; color: var(--muted); letter-spacing: 0.5px; }
     .subhead { display: flex; align-items: center; gap: 16px; margin-top: 12px; }
     .legend { display: flex; gap: 15px; font-size: 12px; color: var(--muted); }
-    .legend em { font-style: normal; display: inline-flex; align-items: center; gap: 6px; }
+    .legend em { font-style: normal; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
     .legend i { width: 9px; height: 9px; }
     .stats { margin-left: auto; font-size: 12px; color: var(--muted); text-align: right; }
     .stats b { font-family: var(--mono); font-weight: 600; color: var(--ink); font-size: 12.5px; }
@@ -152,8 +152,6 @@
     .l-track { height: 12px; background: rgba(120, 100, 60, 0.075); border-radius: 2px; overflow: hidden; }
     .l-bar { display: flex; height: 100%; border-radius: 2px; overflow: hidden; }
     .l-bar span { height: 100%; }
-    .l-bar .user { background: var(--input); }
-    .l-bar .bot { background: var(--output); }
     .l-bar.zero { background: var(--hair); }
     .l-val { text-align: right; font-family: var(--mono); font-weight: 600; font-size: 14.5px; letter-spacing: -0.2px; }
     .lrow.today .l-val { color: var(--output); }
@@ -185,8 +183,8 @@
     .cum-note { font-size: 12px; color: var(--muted); padding-bottom: 6px; }
     .stackbar { display: flex; height: 16px; margin-top: 18px; border-radius: 2px; overflow: hidden; }
     .stackbar span { height: 100%; }
-    .cum-grid { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 20px; border-top: 1px solid var(--hair); }
-    .citem { padding: 14px 18px 4px; border-left: 1px dotted var(--hair); }
+    .cum-grid { display: flex; margin-top: 20px; border-top: 1px solid var(--hair); }
+    .citem { flex: 1; padding: 14px 18px 4px; border-left: 1px dotted var(--hair); }
     .citem:first-child { padding-left: 0; border-left: none; }
     .citem .r1 { display: flex; align-items: center; gap: 8px; font-size: 13px; }
     .citem .r1 i { width: 9px; height: 9px; flex: none; }
@@ -214,7 +212,7 @@
       <div>
         <div class="kicker">AstrBot · Message Report</div>
         <h1>消息统计报告</h1>
-        <div class="lede">数据与 AstrBot 系统数据库同源 <i>·</i> platform_message_history <i>·</i> UTC+8</div>
+        <div class="lede">数据与 AstrBot 后台统计同源 <i>·</i> platform_stats <i>·</i> 本地时间</div>
       </div>
       <div class="mast-right">
         <div class="issue">
@@ -251,7 +249,7 @@
           <em><i style="background: var(--ochre)"></i>峰值</em>
         </div>
         <div class="stats">
-          合计 <b>{{ range24.sum.total }}</b><span class="dot">·</span>时均 <b>{{ range24.avg_hour }}</b><span class="dot">·</span>峰值 <b>{{ range24.peak_total }}</b>（{{ range24.peak_hour }}）<span class="dot">·</span>用户占比 <b>{{ range24.user_pct }}%</b>
+          合计 <b>{{ range24.sum.total }}</b><span class="dot">·</span>时均 <b>{{ range24.avg_hour }}</b><span class="dot">·</span>峰值 <b>{{ range24.peak_total }}</b>（{{ range24.peak_hour }}）<span class="dot">·</span>主平台 <b>{{ range24.top_platform }}</b> 占 <b>{{ range24.top_platform_pct }}%</b>
         </div>
       </div>
       <div class="chart24">
@@ -292,11 +290,12 @@
       </div>
       <div class="subhead">
         <div class="legend">
-          <em><i style="background: var(--input)"></i>用户消息</em>
-          <em><i style="background: var(--output)"></i>机器人消息</em>
+          {% for item in range7.legend %}
+          <em><i style="background: {{ item.color }}"></i>{{ item.name }}</em>
+          {% endfor %}
         </div>
         <div class="stats">
-          合计 <b>{{ range7.sum.total }}</b><span class="dot">·</span>日均 <b>{{ range7.avg_total }}</b><span class="dot">·</span>峰值 <b>{{ range7.peak_total }}</b>（{{ range7.peak_date[5:] }}）<span class="dot">·</span>用户占比 <b>{{ range7.user_pct }}%</b>
+          合计 <b>{{ range7.sum.total }}</b><span class="dot">·</span>日均 <b>{{ range7.avg_total }}</b><span class="dot">·</span>峰值 <b>{{ range7.peak_total }}</b>（{{ range7.peak_date[5:] }}）<span class="dot">·</span>主平台占比 <b>{{ range7.top_platform_pct }}%</b>
         </div>
       </div>
       <div class="ledger">
@@ -308,8 +307,7 @@
             <div class="l-bar zero" style="width: 2%"></div>
             {% else %}
             <div class="l-bar" style="width: {{ d.bar_h }}%">
-              <span class="user" style="width: {{ d.frac_user }}%"></span>
-              <span class="bot" style="width: {{ d.frac_bot }}%"></span>
+              {% for s in d.segments %}<span style="width: {{ s.frac }}%; background: {{ s.color }}"></span>{% endfor %}
             </div>
             {% endif %}
           </div>
@@ -333,7 +331,7 @@
           <em><i style="background: var(--output)"></i>今日</em>
         </div>
         <div class="stats">
-          合计 <b>{{ range31.sum.total }}</b><span class="dot">·</span>日均 <b>{{ range31.avg_total }}</b><span class="dot">·</span>峰值 <b>{{ range31.peak_total }}</b>（{{ range31.peak_date[5:] }}）<span class="dot">·</span>用户占比 <b>{{ range31.user_pct }}%</b>
+          合计 <b>{{ range31.sum.total }}</b><span class="dot">·</span>日均 <b>{{ range31.avg_total }}</b><span class="dot">·</span>峰值 <b>{{ range31.peak_total }}</b>（{{ range31.peak_date[5:] }}）<span class="dot">·</span>主平台占比 <b>{{ range31.top_platform_pct }}%</b>
         </div>
       </div>
       <div class="chart30">
@@ -359,14 +357,14 @@
       <div class="block-head">
         <span class="idx">04</span>
         <h2>累计消息构成</h2>
-        <span class="hint">全部历史 · 用户 / 机器人占比</span>
+        <span class="hint">全部历史 · 平台分布（与后台统计一致）</span>
       </div>
       <div class="cum-hero">
         <div class="cum-num">{{ cumulative.total }}<small>messages</small></div>
-        <div class="cum-note">全部历史累计 · 会话 {{ cumulative.sessions }} 个</div>
+        <div class="cum-note">全部历史累计 · 平台 {{ cumulative.platform_count }} 个</div>
       </div>
       <div class="stackbar">
-        {% for b in cumulative.breakdown[:2] %}
+        {% for b in cumulative.breakdown %}
         <span style="width: {{ b.pct }}%; background: {{ b.color }}"></span>
         {% endfor %}
       </div>
@@ -383,7 +381,7 @@
     <!-- 页脚 -->
     <footer class="foot">
       <span>本报告由 <b>astrbot_plugin_token_usage</b> 自动生成 · 作者 慵懒午睡 · GPLv3</span>
-      <span class="mono">口径 platform_message_history · UTC+8</span>
+      <span class="mono">口径 platform_stats · SUM(count)</span>
     </footer>
   </div>
 </body>

@@ -44,15 +44,35 @@ def sample_daily(days: int) -> list[DayUsage]:
     return out
 
 
+def sample_hourly(hours: int = 24) -> list[DayUsage]:
+    """确定性伪随机逐小时示例数据（模拟昼夜作息）。"""
+    now = datetime.now(TZ)
+    end = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    out = []
+    for i in range(hours):
+        hs = end - timedelta(hours=hours - i)
+        hour = hs.hour
+        # 白天高、深夜低的作息曲线
+        activity = 0.15 + 0.85 * max(0.0, math.sin((hour - 5) / 19 * math.pi)) ** 1.4
+        wave = 1.0 + 0.28 * math.sin(i / 1.9) + 0.18 * math.sin(i / 4.3 + 0.8)
+        vol = activity * wave
+        inp = int(9_000 * vol)
+        cached = int(5_500 * vol * (0.7 + 0.4 * abs(math.sin(i / 2.7))))
+        output = int(2_600 * vol)
+        out.append(DayUsage(hs.strftime("%Y-%m-%d %H:00"), inp, cached, output))
+    return out
+
+
 def main() -> None:
     daily30 = sample_daily(30)
+    hourly24 = sample_hourly(24)
     cumulative = DayUsage(
         "",
         sum(u.input_other for u in daily30) * 26,
         sum(u.input_cached for u in daily30) * 26,
         sum(u.output for u in daily30) * 26,
     )
-    data = build_page_data(daily30, cumulative)
+    data = build_page_data(daily30, cumulative, hourly24)
 
     env = Environment(
         loader=FileSystemLoader(str(HERE / "templates")),

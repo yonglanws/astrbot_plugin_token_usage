@@ -46,8 +46,8 @@ SCHEDULER_TICK = 20
 @register(
     PLUGIN_NAME,
     "慵懒午睡",
-    "Token 用量统计：近7天/近30天/累计消耗，HTML 精美报表，支持定时推送群聊",
-    "1.0.0",
+    "Token 用量统计：近24小时/近7天/近30天/累计消耗，HTML 精美报表，支持定时推送群聊",
+    "1.1.0",
 )
 class TokenUsagePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -107,28 +107,32 @@ class TokenUsagePlugin(Star):
     # ══════════════════════════════════════════════════════════
 
     def _read_stats(self):
-        """读取近 30 天明细与累计数据。返回 (daily30, cumulative)，失败为 None。"""
+        """读取近 30 天明细、累计数据与近 24 小时明细。
+
+        返回 (daily30, cumulative, hourly24)，失败为 None。
+        """
         db_path = find_db_path(str(self.config.get("db_path", "") or "").strip())
         if not db_path:
             logger.warning("[TokenUsage] 未找到 AstrBot 主数据库 data_v4.db")
-            return None, None
+            return None, None, None
         db = TokenDB(db_path)
         daily30 = db.daily_usage(30)
         if daily30 is None:
-            return None, None
+            return None, None, None
         cumulative = db.cumulative()
         if cumulative is None:
-            return None, None
-        return daily30, cumulative
+            return None, None, None
+        hourly24 = db.hourly_usage(24)
+        return daily30, cumulative, hourly24
 
     @staticmethod
     def _load_template() -> str:
         return TEMPLATE_PATH.read_text(encoding="utf-8")
 
-    async def _render_report(self, daily30, cumulative) -> str:
+    async def _render_report(self, daily30, cumulative, hourly24) -> str:
         """渲染报表图片，返回图片 URL 或本地文件路径。"""
         tmpl = self._load_template()
-        data = build_page_data(daily30, cumulative)
+        data = build_page_data(daily30, cumulative, hourly24)
         options = {"type": "png", "full_page": True}
 
         # 优先使用 Star.html_render（内部走 AstrBot 配置的 t2i 渲染服务）
@@ -146,7 +150,7 @@ class TokenUsagePlugin(Star):
 
     async def _build_image(self) -> tuple[str | None, str | None, str]:
         """返回 (图片地址, 降级文本, 错误信息)。"""
-        daily30, cumulative = self._read_stats()
+        daily30, cumulative, hourly24 = self._read_stats()
         if daily30 is None or cumulative is None:
             return (
                 None,
@@ -155,13 +159,18 @@ class TokenUsagePlugin(Star):
                 "请在插件配置 db_path 中手动指定其绝对路径。",
             )
         try:
-            image = await self._render_report(daily30, cumulative)
+            image = await self._render_report(daily30, cumulative, hourly24)
             return image, None, ""
         except Exception as e:
             logger.error(f"[TokenUsage] 报表图片渲染失败: {e}")
             return (
                 None,
-                build_fallback_text(daily30[-7:], cumulative, reason=str(e)[:120]),
+                build_fallback_text(
+                    daily30[-7:],
+                    cumulative,
+                    reason=str(e)[:120],
+                    hourly24=hourly24,
+                ),
                 "",
             )
 

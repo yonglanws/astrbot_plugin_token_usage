@@ -63,6 +63,11 @@ def _day_bounds_utc(date_str: str) -> tuple[str, str]:
     return start_utc, end_utc
 
 
+def _to_utc_str(dt_sh: datetime) -> str:
+    """上海时区 datetime → UTC ISO 字符串（与 provider_stats.created_at 同格式）。"""
+    return dt_sh.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _validated_db_file(path: str) -> str | None:
     """校验并规范化数据库路径。
 
@@ -176,4 +181,35 @@ class TokenDB:
                 conn.close()
         except Exception as e:
             logger.warning(f"[TokenUsage] 查询累计 Token 失败: {e}")
+            return None
+
+    def hourly_usage(self, hours: int = 24) -> list[DayUsage] | None:
+        """最近 N 个整点小时（上海时区，含当前小时），旧 → 新。
+
+        单个只读连接内逐小时查询，与按天统计同样的过滤口径。
+        """
+        try:
+            conn = self._connect()
+            try:
+                cur = conn.cursor()
+                now = datetime.now(TZ)
+                # 当前小时的下一个整点作为窗口右界，左界往前推 N 小时
+                end = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+                start = end - timedelta(hours=hours)
+                result = []
+                for i in range(hours):
+                    hs = start + timedelta(hours=i)
+                    he = hs + timedelta(hours=1)
+                    usage = self._sum_where(
+                        cur,
+                        "agent_type = ? AND created_at >= ? AND created_at < ?",
+                        (TOKEN_AGENT_TYPE, _to_utc_str(hs), _to_utc_str(he)),
+                    )
+                    usage.date = hs.strftime("%Y-%m-%d %H:00")
+                    result.append(usage)
+                return result
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(f"[TokenUsage] 查询近 {hours} 小时 Token 失败: {e}")
             return None

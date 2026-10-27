@@ -118,6 +118,20 @@
     .stats b { font-family: var(--mono); font-weight: 600; color: var(--ink); font-size: 12.5px; }
     .stats .dot { color: var(--hair); margin: 0 7px; }
 
+    /* ── 近 24 小时折线 ── */
+    .chart24 { margin-top: 14px; }
+    .chart24 svg { display: block; }
+    .chart24 .grid24 { stroke: rgba(120, 100, 60, 0.16); stroke-width: 1; stroke-dasharray: 1.5 3.5; }
+    .chart24 .base24 { stroke: var(--ink); stroke-width: 1.2; }
+    .chart24 .dot { fill: var(--panel); stroke: var(--output); stroke-width: 1.4; }
+    .chart24 .dot.peak { fill: var(--ochre); stroke: var(--ochre); }
+    .chart24 .dot.now { fill: var(--output); stroke: var(--output); }
+    .chart24 .plabel { font-family: var(--mono); font-size: 10.5px; fill: var(--ochre); font-weight: 600; letter-spacing: 0.3px; }
+    .chart24 .nlabel { font-family: var(--mono); font-size: 10px; fill: var(--output); }
+    .chart24 .xlabel { font-family: var(--mono); font-size: 10px; fill: var(--faint); }
+    .chart24 .xlabel.mark { fill: var(--muted); }
+    .chart24 .empty { font-family: var(--sans); font-size: 12px; fill: var(--faint); letter-spacing: 1px; }
+
     /* ── 近 7 天账簿 ── */
     .ledger { margin-top: 6px; }
     .lrow {
@@ -225,10 +239,55 @@
       {% endfor %}
     </section>
 
-    <!-- 近 7 天 -->
+    <!-- 近 24 小时 -->
     <section class="block">
       <div class="block-head">
         <span class="idx">01</span>
+        <h2>近 24 小时</h2>
+        <span class="hint">逐小时总消耗走势 · 末点为当前小时</span>
+      </div>
+      <div class="subhead">
+        <div class="legend">
+          <em><i style="background: var(--output)"></i>总消耗</em>
+          <em><i style="background: var(--ochre)"></i>峰值</em>
+        </div>
+        <div class="stats">
+          合计 <b>{{ range24.sum.total }}</b><span class="dot">·</span>时均 <b>{{ range24.avg_hour }}</b><span class="dot">·</span>峰值 <b>{{ range24.peak_total }}</b>（{{ range24.peak_hour }}）<span class="dot">·</span>缓存命中 <b>{{ range24.cached_hit_pct }}%</b>
+        </div>
+      </div>
+      <div class="chart24">
+        <svg width="718" height="198" viewBox="0 0 718 198">
+          <defs>
+            <linearGradient id="area24" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#b4552f" stop-opacity="0.16"/>
+              <stop offset="100%" stop-color="#b4552f" stop-opacity="0.01"/>
+            </linearGradient>
+          </defs>
+          {% for gy in range24.grid %}
+          <line x1="0" y1="{{ gy }}" x2="718" y2="{{ gy }}" class="grid24"/>
+          {% endfor %}
+          <line x1="0" y1="{{ range24.baseline }}" x2="718" y2="{{ range24.baseline }}" class="base24"/>
+          {% if range24.has_data %}
+          <polygon points="{{ range24.area }}" fill="url(#area24)"/>
+          <polyline points="{{ range24.line }}" fill="none" stroke="#b4552f" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+          {% endif %}
+          {% for p in range24.points %}
+          {% if range24.has_data %}<circle cx="{{ p.x }}" cy="{{ p.y }}" r="{% if p.is_peak or p.is_now %}4{% else %}2.2{% endif %}" class="dot{% if p.is_peak %} peak{% elif p.is_now %} now{% endif %}"/>{% endif %}
+          {% endfor %}
+          {% if range24.peak %}<text x="{{ range24.peak.label_x }}" y="{{ range24.peak.label_y }}" text-anchor="{{ range24.peak.label_anchor }}" class="plabel">峰值 {{ range24.peak.total_short }}</text>{% endif %}
+          {% if range24.now %}<text x="{{ range24.now.label_x }}" y="{{ range24.now.label_y }}" text-anchor="{{ range24.now.anchor }}" class="nlabel">现在</text>{% endif %}
+          {% if not range24.has_data %}<text x="359" y="100" text-anchor="middle" class="empty">近 24 小时暂无 Token 消耗</text>{% endif %}
+          {% for p in range24.points %}
+          {% if p.show_label %}<text x="{{ p.x }}" y="193" text-anchor="{{ p.label_anchor }}" class="xlabel mark">{{ p.label }}</text>{% endif %}
+          {% endfor %}
+        </svg>
+      </div>
+    </section>
+
+    <!-- 近 7 天 -->
+    <section class="block">
+      <div class="block-head">
+        <span class="idx">02</span>
         <h2>近 7 天明细</h2>
         <span class="hint">每日消耗构成 · 条长按全段峰值等比缩放</span>
       </div>
@@ -266,7 +325,7 @@
     <!-- 近 30 天 -->
     <section class="block">
       <div class="block-head">
-        <span class="idx">02</span>
+        <span class="idx">03</span>
         <h2>近 30 天趋势</h2>
         <span class="hint">有消耗 {{ range30.active_days }} / 30 天 · 赭金为峰值日</span>
       </div>
@@ -301,7 +360,7 @@
     <!-- 累计 -->
     <section class="block">
       <div class="block-head">
-        <span class="idx">03</span>
+        <span class="idx">04</span>
         <h2>累计消耗构成</h2>
         <span class="hint">全部历史 · 输入 / 缓存 / 输出占比</span>
       </div>

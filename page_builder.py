@@ -19,6 +19,13 @@ COLOR_CACHED = "#3d7a6b"  # 输入（缓存命中）· 松绿
 COLOR_OUTPUT = "#b4552f"  # 输出 · 赭红
 COLOR_OCHRE = "#a8862f"   # 强调 · 赭金
 
+# 近 24 小时折线图绘图区尺寸（与模板中的 SVG 尺寸保持一致）
+LINE_W = 718.0
+LINE_H = 180.0
+LINE_PAD_TOP = 18.0
+LINE_PAD_BOTTOM = 8.0
+LINE_PAD_X = 8.0
+
 
 def fmt(n: int) -> str:
     """千分位分隔。"""
@@ -61,6 +68,100 @@ def _frac(value: int, whole: int) -> float:
     if whole <= 0 or value <= 0:
         return 0.0
     return max(value / whole * 100.0, 1.5)
+
+
+def _hour_block(usages: list[DayUsage]) -> dict:
+    """构建近 24 小时折线图数据（SVG 坐标在 Python 侧计算）。
+
+    usages 为逐小时用量（旧 → 新，date 形如 "YYYY-MM-DD HH:00"）。
+    """
+    n = len(usages)
+    total = _sum(usages)
+    chart_max = max((u.total for u in usages), default=0)
+    baseline = LINE_H - LINE_PAD_BOTTOM
+    usable = baseline - LINE_PAD_TOP
+    step = (LINE_W - 2 * LINE_PAD_X) / max(1, n - 1)
+
+    points = []
+    peak: dict | None = None
+    now_pt: dict | None = None
+    for i, u in enumerate(usages):
+        dt = datetime.strptime(u.date, "%Y-%m-%d %H:00")
+        x = round(LINE_PAD_X + i * step, 2)
+        ratio = (u.total / chart_max) if chart_max > 0 else 0.0
+        y = round(LINE_PAD_TOP + (1 - ratio) * usable, 2)
+
+        anchor, label_x = "middle", x
+        if x < 60:
+            anchor, label_x = "start", x + 2
+        elif x > LINE_W - 60:
+            anchor, label_x = "end", x - 2
+
+        p = {
+            "x": x,
+            "y": y,
+            "label": dt.strftime("%H:00"),
+            "date": dt.strftime("%m-%d"),
+            "total": fmt(u.total),
+            "total_short": fmt_short(u.total),
+            "is_peak": False,
+            "is_now": i == n - 1,
+            "show_label": (i % 4 == 0) or i == n - 1,
+            "label_anchor": anchor,
+            "label_x": label_x,
+            "label_y": round(max(y - 9, 11), 2),
+            "now_label_y": round(y + 17, 2),
+        }
+        points.append(p)
+        if chart_max > 0 and u.total == chart_max and peak is None:
+            p["is_peak"] = True
+            peak = p
+        if p["is_now"]:
+            now_pt = p
+
+    # 峰值与当前小时重合时只显示峰值标签，避免文字重叠
+    if peak is not None and now_pt is not None and peak is now_pt:
+        now_pt = None
+
+    line = " ".join(f"{p['x']},{p['y']}" for p in points)
+    area = (
+        f"{LINE_PAD_X:.2f},{baseline:.2f} "
+        + line
+        + f" {LINE_W - LINE_PAD_X:.2f},{baseline:.2f}"
+    )
+    grid = [round(LINE_PAD_TOP + usable * r, 2) for r in (0.33, 0.66)]
+
+    return {
+        "points": points,
+        "line": line,
+        "area": area,
+        "grid": grid,
+        "baseline": round(baseline, 2),
+        "has_data": chart_max > 0,
+        "peak": peak,
+        "now": (
+            {
+                "label_x": now_pt["label_x"],
+                "label_y": now_pt["now_label_y"],
+                "anchor": now_pt["label_anchor"],
+            }
+            if now_pt is not None
+            else None
+        ),
+        "sum": {
+            "input": fmt(total.input_other),
+            "cached": fmt(total.input_cached),
+            "output": fmt(total.output),
+            "total": fmt(total.total),
+            "total_short": fmt_short(total.total),
+        },
+        "avg_hour": fmt(round(total.total / n)) if n else "0",
+        "avg_hour_short": fmt_short(round(total.total / n)) if n else "0",
+        "peak_total": fmt(chart_max) if chart_max > 0 else "0",
+        "peak_hour": peak["label"] if peak else "—",
+        "active_hours": sum(1 for u in usages if u.total > 0),
+        "cached_hit_pct": _pct(total.input_cached, total.input_all) if total.input_all > 0 else "0.0",
+    }
 
 
 def _range_block(title: str, subtitle: str, usages: list[DayUsage], label_step: int = 1) -> dict:
@@ -140,11 +241,16 @@ def _kpi_card(label: str, usage: DayUsage, date_text: str, accent: str, sub: str
 def build_page_data(
     daily30: list[DayUsage],
     cumulative: DayUsage,
+    hourly24: list[DayUsage] | None = None,
 ) -> dict:
-    """组装完整页面数据。daily30 为最近 30 天（旧 → 新，含今天）。"""
+    """组装完整页面数据。
+
+    daily30 为最近 30 天（旧 → 新，含今天）；hourly24 为最近 24 个整点小时。
+    """
     now = datetime.now(TZ)
     daily7 = daily30[-7:]
 
+    range24 = _hour_block(hourly24 or [])
     range7 = _range_block("近 7 天消耗", "每日明细 · 输入 / 缓存 / 输出", daily7)
     range30 = _range_block("近 30 天趋势", "每日总消耗走势", daily30, label_step=5)
 
@@ -190,6 +296,7 @@ def build_page_data(
         "generated_at": now.strftime("%Y-%m-%d %H:%M"),
         "generated_weekday": "周" + "一二三四五六日"[now.weekday()],
         "kpis": kpis,
+        "range24": range24,
         "range7": range7,
         "range30": range30,
         "cumulative": cumulative_block,
@@ -197,11 +304,22 @@ def build_page_data(
 
 
 def build_fallback_text(
-    daily7: list[DayUsage], cumulative: DayUsage | None, reason: str = ""
+    daily7: list[DayUsage],
+    cumulative: DayUsage | None,
+    reason: str = "",
+    hourly24: list[DayUsage] | None = None,
 ) -> str:
     """渲染失败时的纯文本降级输出（口径同参考插件）。"""
     today = daily7[-1] if daily7 else None
     lines = ["📊 Token 用量统计（与 AstrBot 系统统计同源）", "━━━━━━━━━━━━━━━━━━━━"]
+    if hourly24:
+        h_total = _sum(hourly24)
+        h_peak = max(hourly24, key=lambda u: u.total)
+        lines += [
+            "【近 24 小时】",
+            f"  合计：{fmt(h_total.total)}  峰值：{fmt(h_peak.total)}（{h_peak.date[11:]}）",
+            f"  输入：{fmt(h_total.input_other)}  缓存：{fmt(h_total.input_cached)}  输出：{fmt(h_total.output)}",
+        ]
     if today:
         lines += [
             f"【今日 {today.date}】",
